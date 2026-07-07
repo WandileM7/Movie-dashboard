@@ -8,7 +8,12 @@ import { Toaster, toast } from 'sonner';
 import {
   Film, Search, Star, X, Play, Compass, Library as LibraryIcon, Home as HomeIcon,
   Sparkles, TrendingUp, Trash2, Loader2, Plus, Check, Eye, Bookmark, ThumbsDown, MapPin,
+  Orbit, Dna,
 } from 'lucide-react';
+import {
+  ResponsiveContainer, PieChart, Pie, Cell, RadarChart, PolarGrid, PolarAngleAxis, Radar,
+  BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip,
+} from 'recharts';
 import { MOOD_PRESETS } from '@/lib/seedMovies';
 
 const HERO_IMG = 'https://images.pexels.com/photos/7991501/pexels-photo-7991501.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940';
@@ -144,6 +149,240 @@ const StarRating = ({ value, onChange }) => (
     ))}
   </div>
 );
+
+// ---------- Taste Map (2D emotional constellation) ----------
+const GENRE_COLORS = {
+  Action: '#ef4444', Adventure: '#f97316', Animation: '#f59e0b', Comedy: '#eab308',
+  Crime: '#b91c1c', Drama: '#8b5cf6', Family: '#22c55e', Fantasy: '#a855f7',
+  History: '#a16207', Horror: '#9f1239', Music: '#ec4899', Musical: '#ec4899',
+  Mystery: '#6366f1', Romance: '#f43f5e', 'Sci-Fi': '#06b6d4', Thriller: '#4338ca',
+  War: '#78716c', Western: '#b45309',
+};
+
+const moodColor = (c) => {
+  const lerp = (a, b, t) => Math.round(a + (b - a) * t);
+  if (c < 0) { const t = c + 1; return `rgb(${lerp(244, 139, t)},${lerp(63, 92, t)},${lerp(94, 246, t)})`; }
+  return `rgb(${lerp(139, 52, c)},${lerp(92, 211, c)},${lerp(246, 153, c)})`;
+};
+
+const jitterFor = (title, salt) => {
+  let h = salt;
+  for (let i = 0; i < title.length; i++) h = (h * 33 + title.charCodeAt(i)) >>> 0;
+  return ((h % 1000) / 1000 - 0.5) * 28;
+};
+
+const TasteMap = ({ movies, libMap, onOpen }) => {
+  const [hover, setHover] = useState(null);
+  const [colorMode, setColorMode] = useState('mood'); // 'mood' | 'genre'
+  const [highlightLib, setHighlightLib] = useState(false);
+  const W = 1000, H = 620;
+
+  const points = useMemo(() => movies.map((m) => ({
+    m,
+    x: 60 + (1 - (m.mood.m + 1) / 2) * (W - 120) + jitterFor(m.title, 7),
+    y: 45 + (1 - (m.mood.l + 1) / 2) * (H - 110) + jitterFor(m.title, 13),
+    r: 5 + (m.popularity / 100) * 6,
+    inLib: !!libMap[m.id],
+  })), [movies, libMap]);
+
+  const quadrants = [
+    { x: W * 0.25, y: 30, label: '🍵 Gentle & Cozy' },
+    { x: W * 0.75, y: 30, label: '🎢 Fun & Thrilling' },
+    { x: W * 0.25, y: H - 14, label: '🌧 Bittersweet & Reflective' },
+    { x: W * 0.75, y: H - 14, label: '🌩 Dark & Gripping' },
+  ];
+
+  return (
+    <div className="relative">
+      <div className="flex flex-wrap items-center gap-3 mb-4">
+        <div className="flex rounded-full border border-zinc-700 overflow-hidden text-xs">
+          <button onClick={() => setColorMode('mood')} data-testid="map-color-mood"
+            className={`px-3.5 py-1.5 transition ${colorMode === 'mood' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Color by mood</button>
+          <button onClick={() => setColorMode('genre')} data-testid="map-color-genre"
+            className={`px-3.5 py-1.5 transition ${colorMode === 'genre' ? 'bg-violet-600 text-white' : 'text-zinc-400 hover:text-zinc-200'}`}>Color by genre</button>
+        </div>
+        <button onClick={() => setHighlightLib(!highlightLib)} data-testid="map-highlight-library"
+          className={`px-3.5 py-1.5 rounded-full text-xs border transition ${highlightLib ? 'bg-amber-500/20 border-amber-500/60 text-amber-300' : 'border-zinc-700 text-zinc-400 hover:border-zinc-500'}`}>
+          ★ Highlight my library
+        </button>
+        {colorMode === 'mood' && (
+          <div className="flex items-center gap-2 text-[11px] text-zinc-500 ml-auto">
+            <span>Challenging</span>
+            <div className="w-24 h-2 rounded-full" style={{ background: 'linear-gradient(90deg,#f43f5e,#8b5cf6,#34d399)' }} />
+            <span>Comforting</span>
+          </div>
+        )}
+      </div>
+
+      <div className="relative rounded-2xl ring-1 ring-white/10 bg-gradient-to-b from-[#0d0d16] to-[#12101c] overflow-hidden">
+        <svg viewBox={`0 0 ${W} ${H}`} className="w-full h-auto block" data-testid="taste-map-svg">
+          {/* grid axes */}
+          <line x1={W / 2} y1={30} x2={W / 2} y2={H - 30} stroke="rgba(255,255,255,0.07)" strokeDasharray="4 6" />
+          <line x1={40} y1={H / 2} x2={W - 40} y2={H / 2} stroke="rgba(255,255,255,0.07)" strokeDasharray="4 6" />
+          {/* axis labels */}
+          <text x={48} y={H / 2 - 8} fill="rgba(255,255,255,0.35)" fontSize="13">Calm</text>
+          <text x={W - 95} y={H / 2 - 8} fill="rgba(255,255,255,0.35)" fontSize="13">Intense</text>
+          <text x={W / 2 + 8} y={52} fill="rgba(255,255,255,0.35)" fontSize="13">Light</text>
+          <text x={W / 2 + 8} y={H - 38} fill="rgba(255,255,255,0.35)" fontSize="13">Heavy</text>
+          {quadrants.map((q) => (
+            <text key={q.label} x={q.x} y={q.y} textAnchor="middle" fill="rgba(255,255,255,0.22)" fontSize="15" fontWeight="600">{q.label}</text>
+          ))}
+          {points.map((p) => {
+            const dim = highlightLib && !p.inLib;
+            const fill = colorMode === 'mood' ? moodColor(p.m.mood.c) : (GENRE_COLORS[p.m.genres[0]] || '#8b5cf6');
+            return (
+              <circle
+                key={p.m.id}
+                cx={p.x} cy={p.y} r={hover?.m.id === p.m.id ? p.r + 3 : p.r}
+                fill={fill}
+                fillOpacity={dim ? 0.12 : 0.85}
+                stroke={p.inLib ? '#fbbf24' : 'rgba(255,255,255,0.25)'}
+                strokeWidth={p.inLib ? 2 : 0.5}
+                className="cursor-pointer transition-all"
+                onMouseEnter={() => setHover(p)}
+                onMouseLeave={() => setHover(null)}
+                onClick={() => onOpen(p.m)}
+              />
+            );
+          })}
+        </svg>
+
+        {hover && (
+          <div
+            className="absolute z-10 pointer-events-none flex gap-2.5 p-2 rounded-xl bg-black/90 backdrop-blur ring-1 ring-white/15 shadow-2xl w-52"
+            style={{
+              left: `calc(${(hover.x / W) * 100}% ${hover.x > W * 0.72 ? '- 220px' : '+ 14px'})`,
+              top: `calc(${(hover.y / H) * 100}% ${hover.y > H * 0.65 ? '- 110px' : '+ 8px'})`,
+            }}
+          >
+            <div className="w-14 h-20 rounded-md overflow-hidden shrink-0 relative bg-zinc-800">
+              <Poster movie={hover.m} className="w-full h-full absolute inset-0" />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-semibold leading-tight">{hover.m.title}</p>
+              <p className="text-[10px] text-zinc-400 mt-0.5">{hover.m.year} · ★ {hover.m.rating}</p>
+              <p className="text-[10px] text-zinc-500 mt-1 leading-snug">{hover.m.genres.slice(0, 2).join(' · ')}</p>
+              {hover.inLib && <p className="text-[10px] text-amber-300 mt-1">★ In your library</p>}
+            </div>
+          </div>
+        )}
+      </div>
+      <p className="text-[11px] text-zinc-600 mt-3">Each dot is a film positioned by its emotional coordinates — hover to preview, click to open. Size = popularity.</p>
+    </div>
+  );
+};
+
+// ---------- Taste DNA ----------
+const PERSONAS = {
+  Comforting: { name: 'The Comfort Curator', desc: 'You gravitate toward warm, reassuring stories that feel like a soft blanket.' },
+  Challenging: { name: 'The Fearless Explorer', desc: 'You seek films that confront, provoke, and refuse easy answers.' },
+  Light: { name: 'The Joy Seeker', desc: 'Playful, buoyant cinema is your happy place — laughter over gloom.' },
+  Heavy: { name: 'The Deep Diver', desc: 'You are drawn to weighty, emotionally rich stories that stay with you.' },
+  Calm: { name: 'The Quiet Contemplative', desc: 'Slow-burning, meditative films are where you find meaning.' },
+  Intense: { name: 'The Adrenaline Chaser', desc: 'You want cinema that grabs you by the collar and never lets go.' },
+};
+const PIE_COLORS = ['#8b5cf6', '#ec4899', '#06b6d4', '#f59e0b', '#34d399', '#f43f5e', '#6366f1', '#eab308'];
+
+const TasteDNA = ({ libItems, onBrowse }) => {
+  const data = useMemo(() => {
+    const positives = libItems.filter((i) => i.movie && i.status !== 'dropped' && (!i.rating || i.rating >= 3));
+    if (positives.length < 3) return null;
+    const w = (i) => (i.rating ? i.rating - 2 : 1); // 3star->1, 5star->3
+    // Mood radar (6 poles)
+    const poles = { Comforting: 0, Challenging: 0, Light: 0, Heavy: 0, Calm: 0, Intense: 0 };
+    let tot = 0;
+    const genreCount = {};
+    const decadeCount = {};
+    for (const i of positives) {
+      const wt = w(i);
+      tot += wt;
+      const { c, l, m } = i.movie.mood;
+      poles.Comforting += Math.max(c, 0) * wt; poles.Challenging += Math.max(-c, 0) * wt;
+      poles.Light += Math.max(l, 0) * wt; poles.Heavy += Math.max(-l, 0) * wt;
+      poles.Calm += Math.max(m, 0) * wt; poles.Intense += Math.max(-m, 0) * wt;
+      for (const g of i.movie.genres) genreCount[g] = (genreCount[g] || 0) + wt;
+      const d = `${Math.floor(i.movie.year / 10) * 10}s`;
+      decadeCount[d] = (decadeCount[d] || 0) + 1;
+    }
+    const radar = Object.entries(poles).map(([axis, v]) => ({ axis, value: Math.round((v / tot) * 100) }));
+    const genres = Object.entries(genreCount).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([name, value]) => ({ name, value: Math.round(value * 10) / 10 }));
+    const decades = Object.entries(decadeCount).sort((a, b) => parseInt(a[0]) - parseInt(b[0])).map(([name, count]) => ({ name, count }));
+    const dominant = radar.reduce((a, b) => (b.value > a.value ? b : a));
+    return { radar, genres, decades, dominant, count: positives.length };
+  }, [libItems]);
+
+  if (!data) {
+    return (
+      <div className="text-center py-20 text-zinc-500">
+        <Dna className="w-10 h-10 mx-auto mb-3 opacity-40" />
+        <p className="text-sm max-w-sm mx-auto">Your Taste DNA needs at least 3 movies in your library (rated 3★+ or tracked). Add a few favorites and come back.</p>
+        <Button onClick={onBrowse} className="mt-4 bg-violet-600 hover:bg-violet-500">Browse Movies</Button>
+      </div>
+    );
+  }
+
+  const persona = PERSONAS[data.dominant.axis];
+  const topGenres = data.genres.slice(0, 2).map((g) => g.name).join(' & ');
+
+  return (
+    <div>
+      <div className="rounded-2xl p-6 md:p-8 mb-8 ring-1 ring-violet-500/25 bg-gradient-to-r from-violet-950/50 via-fuchsia-950/30 to-transparent" data-testid="dna-persona">
+        <p className="text-xs uppercase tracking-widest text-violet-400 font-semibold mb-2">Your Taste Persona · from {data.count} titles</p>
+        <h2 className="text-2xl md:text-4xl font-bold font-display text-transparent bg-clip-text bg-gradient-to-r from-violet-300 to-fuchsia-300">{persona.name}</h2>
+        <p className="text-zinc-400 text-sm mt-2 max-w-xl">{persona.desc}</p>
+        <p className="text-zinc-300 text-sm mt-3">Signature blend: <span className="text-fuchsia-300 font-semibold">{topGenres}</span> · leans <span className="text-violet-300 font-semibold">{data.dominant.axis.toLowerCase()}</span> ({data.dominant.value}%)</p>
+      </div>
+
+      <div className="grid md:grid-cols-3 gap-6">
+        <div className="bg-white/[0.03] rounded-2xl p-5 ring-1 ring-white/8">
+          <p className="text-xs uppercase tracking-widest text-zinc-500 font-semibold mb-2">Mood Profile</p>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <RadarChart data={data.radar} outerRadius="72%">
+                <PolarGrid stroke="rgba(255,255,255,0.1)" />
+                <PolarAngleAxis dataKey="axis" tick={{ fill: '#a1a1aa', fontSize: 11 }} />
+                <Radar dataKey="value" stroke="#a78bfa" fill="#8b5cf6" fillOpacity={0.45} />
+              </RadarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+        <div className="bg-white/[0.03] rounded-2xl p-5 ring-1 ring-white/8">
+          <p className="text-xs uppercase tracking-widest text-zinc-500 font-semibold mb-2">Genre Distribution</p>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <PieChart>
+                <Pie data={data.genres} dataKey="value" nameKey="name" innerRadius="45%" outerRadius="75%" paddingAngle={3} stroke="none">
+                  {data.genres.map((g, i) => <Cell key={g.name} fill={PIE_COLORS[i % PIE_COLORS.length]} />)}
+                </Pie>
+                <ReTooltip contentStyle={{ background: '#18181b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
+              </PieChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="flex flex-wrap gap-x-3 gap-y-1 mt-1">
+            {data.genres.slice(0, 6).map((g, i) => (
+              <span key={g.name} className="flex items-center gap-1 text-[11px] text-zinc-400">
+                <span className="w-2 h-2 rounded-full" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} /> {g.name}
+              </span>
+            ))}
+          </div>
+        </div>
+        <div className="bg-white/[0.03] rounded-2xl p-5 ring-1 ring-white/8">
+          <p className="text-xs uppercase tracking-widest text-zinc-500 font-semibold mb-2">Decade Affinity</p>
+          <div className="h-64">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={data.decades}>
+                <XAxis dataKey="name" tick={{ fill: '#a1a1aa', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis allowDecimals={false} tick={{ fill: '#71717a', fontSize: 10 }} axisLine={false} tickLine={false} width={24} />
+                <ReTooltip cursor={{ fill: 'rgba(255,255,255,0.04)' }} contentStyle={{ background: '#18181b', border: '1px solid rgba(255,255,255,0.1)', borderRadius: 8, fontSize: 12 }} />
+                <Bar dataKey="count" fill="#c084fc" radius={[6, 6, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 // ---------- Detail Modal ----------
 const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemove, onOpen, libMap, onQuickAdd }) => {
@@ -481,6 +720,8 @@ function App() {
           <nav className="flex items-center gap-1">
             <NavBtn id="home" icon={HomeIcon} label="Home" />
             <NavBtn id="mood" icon={Sparkles} label="Mood Lab" />
+            <NavBtn id="map" icon={Orbit} label="Taste Map" />
+            <NavBtn id="dna" icon={Dna} label="Taste DNA" />
             <NavBtn id="library" icon={LibraryIcon} label="My Library" />
           </nav>
           <div className="ml-auto relative w-40 sm:w-64">
@@ -600,6 +841,28 @@ function App() {
                 {!moodResults.length && !moodLoading && <p className="text-zinc-500 text-sm py-10 text-center">Move the sliders to explore the mood-space.</p>}
               </div>
             </div>
+          </div>
+        )}
+
+        {/* ============ TASTE MAP ============ */}
+        {view === 'map' && (
+          <div className="mt-8">
+            <h1 className="text-2xl md:text-4xl font-bold font-display mb-1">The <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-fuchsia-400">Taste Map</span></h1>
+            <p className="text-zinc-500 text-sm mb-6">Every film in the catalog, charted across the emotional plane. Calm↔Intense · Light↔Heavy.</p>
+            {loading ? (
+              <div className="flex justify-center py-24"><Loader2 className="w-8 h-8 animate-spin text-violet-400" /></div>
+            ) : (
+              <TasteMap movies={movies} libMap={libMap} onOpen={setSelected} />
+            )}
+          </div>
+        )}
+
+        {/* ============ TASTE DNA ============ */}
+        {view === 'dna' && (
+          <div className="mt-8">
+            <h1 className="text-2xl md:text-4xl font-bold font-display mb-1">Your <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-fuchsia-400">Taste DNA</span></h1>
+            <p className="text-zinc-500 text-sm mb-6">A personality profile decoded from your library and ratings.</p>
+            <TasteDNA libItems={libItems} onBrowse={() => setView('home')} />
           </div>
         )}
 

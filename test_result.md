@@ -269,3 +269,27 @@ agent_communication:
       message: "User approved automated frontend testing. Please test full UI flows: home page (hero, presets, rows, catalog grid, search, genre filter), Mood Lab (sliders change results, presets, match % badges), movie modal (real TMDB trailer plays via /embed/{key}, real ZA providers with logos render, library status buttons, star rating), Library page (tabs, counts, remove). userId is auto-generated in localStorage."
     - agent: "testing"
       message: "✅ FRONTEND UI TESTING COMPLETE - ALL 32 TESTS PASSED! Tested all 5 major flows with 0 console errors and 0 network failures. HOME PAGE (8/8): Hero, 6 presets, For You/Trending rows with 156 cards, catalog grid (126 movies), genre filter (Horror→9 movies), search (inception works). MOOD LAB (7/7): 3 sliders functional, 6 presets, 18 results with match % badges, cozy vs mindbending results completely different (NO overlap in top 3), slider drag updates results live. MOVIE MODAL (9/9): Real TMDB providers with logos (4 providers: Apple TV Store, Google Play Movies), real YouTube trailer embed (/embed/{key} format, NOT search fallback!), library controls work (Watching button + toast), star rating works (4 stars filled + toast). LIBRARY PAGE (6/6): All 4 tabs with counts, movie appears with star rating, remove button works (count 1→0). CONTINUE WATCHING (2/2): Row appears with added movie. MVP is production-ready and exceeds expectations - TMDB integration delivers real trailers and providers!"
+
+frontend:
+  - task: "Taste Map view (SVG emotional constellation)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "SVG scatter of all 126 movies: x=Calm-Intense, y=Light-Heavy, color by mood (comforting gradient) or genre toggle, size=popularity, quadrant labels, hover poster tooltip, click opens modal, 'Highlight my library' toggle (amber rings + dim others). Verified via screenshot."
+  - task: "Taste DNA view (persona + radar/pie/bar charts)"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "Computes from library (>=3 non-dropped, rating>=3 items): persona headline (6 personas by dominant mood pole), mood radar (recharts), genre donut, decade bars. Empty state prompts browsing. Verified via screenshot with 5-item demo library (userId '0') -> 'The Adrenaline Chaser', correct charts."
