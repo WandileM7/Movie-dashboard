@@ -8,13 +8,14 @@ import { Toaster, toast } from 'sonner';
 import {
   Film, Search, Star, X, Play, Compass, Library as LibraryIcon, Home as HomeIcon,
   Sparkles, TrendingUp, Trash2, Loader2, Plus, Check, Eye, Bookmark, ThumbsDown, MapPin,
-  Orbit, Dna, Heart, LogOut,
+  Orbit, Dna, Heart, LogOut, ExternalLink,
 } from 'lucide-react';
 import {
   ResponsiveContainer, PieChart, Pie, Cell, RadarChart, PolarGrid, PolarAngleAxis, Radar,
   BarChart, Bar, XAxis, YAxis, Tooltip as ReTooltip,
 } from 'recharts';
 import { MOOD_PRESETS } from '@/lib/seedMovies';
+import { searchLink } from '@/lib/platformLinks';
 
 const HERO_IMG = 'https://images.pexels.com/photos/7991501/pexels-photo-7991501.jpeg?auto=compress&cs=tinysrgb&dpr=2&h=650&w=940';
 
@@ -581,10 +582,18 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
                         <div key={cat} className="flex items-center gap-2 flex-wrap">
                           <span className="text-[10px] uppercase tracking-wider text-zinc-500 w-12">{CATEGORY_LABELS[cat]}</span>
                           {items.map((p) => (
-                            <span key={`${p.providerId}-${cat}`} className="flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-xs font-medium" title={p.name}>
+                            <a
+                              key={`${p.providerId}-${cat}`}
+                              href={p.url || searchLink(p.name, movie.title, movie.year)}
+                              target="_blank" rel="noopener noreferrer"
+                              title={p.linkType === 'exact' ? `Open ${movie.title} on ${p.name}` : `Search ${movie.title} on ${p.name}`}
+                              data-testid={`provider-link-${p.providerId}`}
+                              className="flex items-center gap-1.5 pl-1 pr-2 py-1 rounded-lg bg-white/5 border border-white/10 text-xs font-medium hover:border-violet-500/60 hover:bg-violet-500/10 transition group/prov"
+                            >
                               {p.logoUrl && <img src={p.logoUrl} alt={p.name} className="w-5 h-5 rounded" />}
                               {p.name}
-                            </span>
+                              <ExternalLink className="w-3 h-3 text-zinc-600 group-hover/prov:text-violet-300 transition" />
+                            </a>
                           ))}
                         </div>
                       );
@@ -602,7 +611,15 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
                 <>
                   <div className="flex flex-wrap gap-2">
                     {(movie.providers || []).map((p) => (
-                      <span key={p} className={`px-3 py-1 rounded-lg border text-xs font-semibold ${PROVIDER_COLORS[p] || 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}>{p}</span>
+                      <a
+                        key={p}
+                        href={searchLink(p, movie.title, movie.year)}
+                        target="_blank" rel="noopener noreferrer"
+                        title={`Search ${movie.title} on ${p}`}
+                        className={`flex items-center gap-1.5 px-3 py-1 rounded-lg border text-xs font-semibold hover:brightness-125 transition ${PROVIDER_COLORS[p] || 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}
+                      >
+                        {p} <ExternalLink className="w-3 h-3 opacity-60" />
+                      </a>
                     ))}
                   </div>
                   <p className="text-[10px] text-zinc-600 mt-1.5">Sample availability — connects to live TMDB data when an API key is added.</p>

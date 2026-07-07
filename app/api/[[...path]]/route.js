@@ -6,6 +6,7 @@ import {
   hashPassword, verifyPassword, signSession, getSessionUser,
   SESSION_COOKIE, cookieOptions,
 } from '@/lib/auth';
+import { searchLink, normalizeService } from '@/lib/platformLinks';
 
 let client = null;
 let seedPromise = null;
@@ -42,6 +43,47 @@ const TMDB_BASE = 'https://api.themoviedb.org/3';
 const TMDB_IMG = 'https://image.tmdb.org/t/p';
 const TRAILER_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
 const PROVIDER_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
+const DEEPLINK_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
+
+// ---------- Streaming Availability API (optional): EXACT platform deep links ----------
+// Free tier on RapidAPI. When STREAMING_AVAILABILITY_API_KEY is set, provider
+// badges link straight to the movie's title page on each platform. Cached per
+// movie+region in Mongo so the free quota is barely touched.
+async function getDeepLinks(db, movie, region) {
+  const apiKey = process.env.STREAMING_AVAILABILITY_API_KEY;
+  if (!apiKey || !movie.tmdbId) return null;
+
+  const cached = movie.saDeepLinks;
+  if (cached && cached.region === region && isFresh(cached.cachedAt, DEEPLINK_TTL_MS)) {
+    return cached.byService;
+  }
+
+  try {
+    const country = region.toLowerCase();
+    const res = await fetch(
+      `https://streaming-availability.p.rapidapi.com/shows/movie/${movie.tmdbId}?country=${country}`,
+      { headers: { 'X-RapidAPI-Key': apiKey }, cache: 'no-store' }
+    );
+    if (!res.ok) throw new Error(`SA API ${res.status}`);
+    const show = await res.json();
+    const options = show?.streamingOptions?.[country] || [];
+    // Map: normalized service key -> deep link (prefer subscription > free > rent > buy)
+    const rank = { subscription: 0, free: 1, addon: 2, rent: 3, buy: 4 };
+    const byService = {};
+    for (const opt of [...options].sort((a, b) => (rank[a.type] ?? 9) - (rank[b.type] ?? 9))) {
+      const key = normalizeService(opt.service?.name || opt.service?.id);
+      if (opt.link && !byService[key]) byService[key] = opt.link;
+    }
+    await db.collection('movies').updateOne(
+      { id: movie.id },
+      { $set: { saDeepLinks: { region, byService, cachedAt: new Date().toISOString() } } }
+    );
+    return byService;
+  } catch (e) {
+    console.error('Streaming Availability error:', e.message);
+    return cached?.region === region ? cached.byService : null; // stale beats nothing
+  }
+}
 
 async function tmdbFetch(apiPath, params = {}) {
   const u = new URL(`${TMDB_BASE}${apiPath}`);
@@ -109,12 +151,32 @@ async function getMovieMetadata(db, movie, region) {
   }
 
   if (Object.keys(updates).length) await col.updateOne({ id: movie.id }, { $set: updates });
+
+  // 4. Attach a clickable URL to every provider badge:
+  //    exact platform deep link when the Streaming Availability key is set,
+  //    otherwise the platform's search preloaded with the title.
+  let providersOut = tmdbProviders || null;
+  if (providersOut?.items?.length) {
+    const deepLinks = await getDeepLinks(db, { ...movie, tmdbId }, region);
+    providersOut = {
+      ...providersOut,
+      items: providersOut.items.map((item) => {
+        const exact = deepLinks?.[normalizeService(item.name)] || null;
+        return {
+          ...item,
+          url: exact || searchLink(item.name, movie.title, movie.year),
+          linkType: exact ? 'exact' : 'search',
+        };
+      }),
+    };
+  }
+
   return {
     tmdbEnabled: true,
     tmdbId: tmdbId || null,
     trailerKey: tmdbTrailer?.key || null,
     trailerName: tmdbTrailer?.name || null,
-    providers: tmdbProviders || null,
+    providers: providersOut,
     posterUrl: updates.posterUrl || movie.posterUrl || null,
     backdropUrl: updates.backdropUrl || movie.backdropUrl || null,
   };
