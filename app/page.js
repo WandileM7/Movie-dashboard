@@ -482,6 +482,13 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
     fetch(`/api/movies/${movie.id}/metadata?region=ZA`).then((r) => r.json()).then(setMeta).catch(() => setMeta({ tmdbEnabled: false }));
   }, [movie.id]);
 
+  // Lock the page behind the modal so only the modal scrolls.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   const trailerQuery = encodeURIComponent(`${movie.title} ${movie.year} official trailer`);
   const trailerSrc = meta?.trailerKey
     ? `https://www.youtube.com/embed/${meta.trailerKey}?autoplay=1`
@@ -490,8 +497,12 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
   const CATEGORY_LABELS = { stream: 'Stream', rent: 'Rent', buy: 'Buy' };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center p-0 md:p-6 overflow-y-auto" data-testid="movie-modal">
+    <div className="fixed inset-0 z-50 overflow-y-auto" data-testid="movie-modal">
       <div className="fixed inset-0 bg-black/80 backdrop-blur-sm" onClick={onClose} />
+      {/* Centering lives on this inner wrapper (min-h-full), NOT on the scroll
+          container — otherwise a modal taller than the viewport gets its top
+          pushed off-screen with no way to scroll up to it. */}
+      <div className="flex min-h-full items-start md:items-center justify-center p-0 md:p-6">
       <div className="relative w-full max-w-3xl bg-[#12121a] md:rounded-2xl ring-1 ring-white/10 shadow-2xl my-0 md:my-8 overflow-hidden">
         <button onClick={onClose} className="absolute top-3 right-3 z-20 w-9 h-9 rounded-full bg-black/60 backdrop-blur flex items-center justify-center hover:bg-black/90 transition" data-testid="modal-close">
           <X className="w-5 h-5" />
@@ -653,6 +664,7 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
             </div>
           </div>
         )}
+      </div>
       </div>
     </div>
   );
