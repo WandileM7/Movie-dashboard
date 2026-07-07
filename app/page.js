@@ -148,14 +148,21 @@ const StarRating = ({ value, onChange }) => (
 // ---------- Detail Modal ----------
 const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemove, onOpen, libMap, onQuickAdd }) => {
   const [detail, setDetail] = useState(null);
+  const [meta, setMeta] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
 
   useEffect(() => {
-    setDetail(null); setShowTrailer(false);
+    setDetail(null); setMeta(null); setShowTrailer(false);
     fetch(`/api/movies/${movie.id}`).then((r) => r.json()).then(setDetail).catch(() => {});
+    fetch(`/api/movies/${movie.id}/metadata?region=ZA`).then((r) => r.json()).then(setMeta).catch(() => setMeta({ tmdbEnabled: false }));
   }, [movie.id]);
 
   const trailerQuery = encodeURIComponent(`${movie.title} ${movie.year} official trailer`);
+  const trailerSrc = meta?.trailerKey
+    ? `https://www.youtube.com/embed/${meta.trailerKey}?autoplay=1`
+    : `https://www.youtube.com/embed?listType=search&list=${trailerQuery}&autoplay=1`;
+  const realProviders = meta?.tmdbEnabled && meta?.providers ? meta.providers : null;
+  const CATEGORY_LABELS = { stream: 'Stream', rent: 'Rent', buy: 'Buy' };
 
   return (
     <div className="fixed inset-0 z-50 flex items-start md:items-center justify-center p-0 md:p-6 overflow-y-auto" data-testid="movie-modal">
@@ -170,7 +177,7 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemo
           {showTrailer ? (
             <iframe
               className="w-full h-full"
-              src={`https://www.youtube.com/embed?listType=search&list=${trailerQuery}&autoplay=1`}
+              src={trailerSrc}
               title={`${movie.title} trailer`}
               allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
               allowFullScreen
@@ -229,12 +236,47 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemo
             {/* Where to watch */}
             <div className="mt-5">
               <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2 font-semibold flex items-center gap-1.5"><MapPin className="w-3.5 h-3.5" /> Where to Watch <span className="text-zinc-600 normal-case tracking-normal">(South Africa)</span></p>
-              <div className="flex flex-wrap gap-2">
-                {(movie.providers || []).map((p) => (
-                  <span key={p} className={`px-3 py-1 rounded-lg border text-xs font-semibold ${PROVIDER_COLORS[p] || 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}>{p}</span>
-                ))}
-              </div>
-              {movie.providersSample && <p className="text-[10px] text-zinc-600 mt-1.5">Sample availability — connects to live TMDB data when an API key is added.</p>}
+              {!meta ? (
+                <div className="flex gap-2">
+                  {[1, 2, 3].map((i) => <div key={i} className="w-20 h-7 rounded-lg bg-zinc-800/80 animate-pulse" />)}
+                </div>
+              ) : realProviders ? (
+                realProviders.items?.length ? (
+                  <div className="space-y-2.5" data-testid="real-providers">
+                    {['stream', 'rent', 'buy'].map((cat) => {
+                      const items = realProviders.items.filter((p) => p.category === cat);
+                      if (!items.length) return null;
+                      return (
+                        <div key={cat} className="flex items-center gap-2 flex-wrap">
+                          <span className="text-[10px] uppercase tracking-wider text-zinc-500 w-12">{CATEGORY_LABELS[cat]}</span>
+                          {items.map((p) => (
+                            <span key={`${p.providerId}-${cat}`} className="flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-lg bg-white/5 border border-white/10 text-xs font-medium" title={p.name}>
+                              {p.logoUrl && <img src={p.logoUrl} alt={p.name} className="w-5 h-5 rounded" />}
+                              {p.name}
+                            </span>
+                          ))}
+                        </div>
+                      );
+                    })}
+                    {realProviders.link && (
+                      <a href={realProviders.link} target="_blank" rel="noopener noreferrer" className="inline-block text-[11px] text-violet-400 hover:text-violet-300 underline underline-offset-2">
+                        View all options on TMDB ↗
+                      </a>
+                    )}
+                  </div>
+                ) : (
+                  <p className="text-xs text-zinc-500">Not currently available on streaming services in South Africa.</p>
+                )
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2">
+                    {(movie.providers || []).map((p) => (
+                      <span key={p} className={`px-3 py-1 rounded-lg border text-xs font-semibold ${PROVIDER_COLORS[p] || 'bg-zinc-800 text-zinc-300 border-zinc-700'}`}>{p}</span>
+                    ))}
+                  </div>
+                  <p className="text-[10px] text-zinc-600 mt-1.5">Sample availability — connects to live TMDB data when an API key is added.</p>
+                </>
+              )}
             </div>
           </div>
 

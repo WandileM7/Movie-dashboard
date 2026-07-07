@@ -33,6 +33,89 @@ function assignProviders(title) {
   return [...new Set(providers)];
 }
 
+// ---------- TMDB (Bearer v4 Read Access Token on v3 endpoints) ----------
+const TMDB_BASE = 'https://api.themoviedb.org/3';
+const TMDB_IMG = 'https://image.tmdb.org/t/p';
+const TRAILER_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
+const PROVIDER_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
+
+async function tmdbFetch(apiPath, params = {}) {
+  const u = new URL(`${TMDB_BASE}${apiPath}`);
+  Object.entries(params).forEach(([k, v]) => {
+    if (v !== undefined && v !== null) u.searchParams.set(k, String(v));
+  });
+  const res = await fetch(u.toString(), {
+    headers: { Authorization: `Bearer ${process.env.TMDB_API_KEY}`, 'Content-Type': 'application/json' },
+    cache: 'no-store',
+  });
+  if (!res.ok) throw new Error(`TMDB request failed: ${res.status}`);
+  return res.json();
+}
+
+const isFresh = (cachedAt, ttl) => cachedAt && Date.now() - new Date(cachedAt).getTime() < ttl;
+
+async function getMovieMetadata(db, movie, region) {
+  const col = db.collection('movies');
+  let { tmdbId, tmdbTrailer, tmdbProviders } = movie;
+  const updates = {};
+
+  // 1. Resolve tmdb_id via search (permanent cache)
+  if (!tmdbId) {
+    const s = await tmdbFetch('/search/movie', { query: movie.title, year: movie.year });
+    const results = s.results || [];
+    const best = results.find((r) => (r.title || '').toLowerCase() === movie.title.toLowerCase()) || results[0];
+    if (best) {
+      tmdbId = best.id;
+      updates.tmdbId = tmdbId;
+      if (best.poster_path) updates.posterUrl = `${TMDB_IMG}/w500${best.poster_path}`;
+      if (best.backdrop_path) updates.backdropUrl = `${TMDB_IMG}/w780${best.backdrop_path}`;
+    }
+  }
+
+  // 2. Official YouTube trailer key (30-day TTL)
+  if (tmdbId && !(tmdbTrailer && isFresh(tmdbTrailer.cachedAt, TRAILER_TTL_MS))) {
+    const v = await tmdbFetch(`/movie/${tmdbId}/videos`);
+    const vids = v.results || [];
+    const t =
+      vids.find((x) => x.type === 'Trailer' && x.site === 'YouTube' && x.official) ||
+      vids.find((x) => x.type === 'Trailer' && x.site === 'YouTube') ||
+      vids.find((x) => x.site === 'YouTube');
+    tmdbTrailer = { key: t ? t.key : null, name: t ? t.name : null, cachedAt: new Date().toISOString() };
+    updates.tmdbTrailer = tmdbTrailer;
+  }
+
+  // 3. Watch providers for region (7-day TTL)
+  if (tmdbId && !(tmdbProviders && tmdbProviders.region === region && isFresh(tmdbProviders.cachedAt, PROVIDER_TTL_MS))) {
+    const p = await tmdbFetch(`/movie/${tmdbId}/watch/providers`);
+    const entry = (p.results || {})[region];
+    const decorate = (list, category) =>
+      (list || []).map((x) => ({
+        providerId: x.provider_id,
+        name: x.provider_name,
+        logoUrl: x.logo_path ? `${TMDB_IMG}/w92${x.logo_path}` : null,
+        category,
+      }));
+    tmdbProviders = {
+      region,
+      link: entry?.link || null,
+      items: entry ? [...decorate(entry.flatrate, 'stream'), ...decorate(entry.rent, 'rent'), ...decorate(entry.buy, 'buy')] : [],
+      cachedAt: new Date().toISOString(),
+    };
+    updates.tmdbProviders = tmdbProviders;
+  }
+
+  if (Object.keys(updates).length) await col.updateOne({ id: movie.id }, { $set: updates });
+  return {
+    tmdbEnabled: true,
+    tmdbId: tmdbId || null,
+    trailerKey: tmdbTrailer?.key || null,
+    trailerName: tmdbTrailer?.name || null,
+    providers: tmdbProviders || null,
+    posterUrl: updates.posterUrl || movie.posterUrl || null,
+    backdropUrl: updates.backdropUrl || movie.backdropUrl || null,
+  };
+}
+
 async function fetchWikipediaPosters(wikiTitles) {
   // Batch-fetch poster thumbnails from Wikipedia pageimages API (no key needed)
   const results = {};
@@ -173,6 +256,28 @@ async function handler(request, { params }) {
       await ensureSeeded(db);
       const genres = await db.collection('movies').distinct('genres');
       return json({ genres: genres.sort() });
+    }
+
+    // Movie TMDB metadata: real trailer + streaming providers (cached with TTL)
+    if (path[0] === 'movies' && path[1] && path[2] === 'metadata' && method === 'GET') {
+      await ensureSeeded(db);
+      const movie = await db.collection('movies').findOne({ id: path[1] }, { projection: { _id: 0 } });
+      if (!movie) return json({ error: 'Movie not found' }, 404);
+      if (!process.env.TMDB_API_KEY) return json({ tmdbEnabled: false, trailerKey: null, providers: null });
+      const region = url.searchParams.get('region') || 'ZA';
+      try {
+        const meta = await getMovieMetadata(db, movie, region);
+        return json(meta);
+      } catch (e) {
+        console.error('TMDB metadata error:', e.message);
+        return json({
+          tmdbEnabled: true,
+          error: 'tmdb_fetch_failed',
+          tmdbId: movie.tmdbId || null,
+          trailerKey: movie.tmdbTrailer?.key || null,
+          providers: movie.tmdbProviders || null,
+        });
+      }
     }
 
     // Movie detail + similar

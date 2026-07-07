@@ -160,6 +160,20 @@ backend:
         - working: true
           agent: "testing"
           comment: "✅ ALL TESTS PASSED (11/11): POST with status 'watching' creates entry with addedAt, updatedAt. POST again with rating:5 upserts correctly (keeps status, adds rating). POST another movie with status:'watched', rating:4 works. GET returns 2 items with joined movie objects, sorted by updatedAt desc. GET with ?status=watching returns 1 item. Validation working: invalid status→400, rating 7→400, missing userId→400, nonexistent movieId→404. DELETE returns {deleted:true}, GET confirms 1 item left. Cleanup successful. All CRUD operations working flawlessly."
+  - task: "TMDB metadata endpoint (GET /api/movies/:id/metadata?region=ZA)"
+    implemented: true
+    working: true
+    file: "app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "main"
+          comment: "New TMDB integration with real API key in .env (TMDB_API_KEY, Bearer v4 token). Resolves tmdbId via /search/movie (permanent cache on movie doc), official YouTube trailerKey via /movie/{id}/videos (30d TTL), ZA providers via /movie/{id}/watch/providers (7d TTL, stream/rent/buy categories, logo URLs). Also upgrades posterUrl/backdropUrl from TMDB. Verified manually with Inception (tmdbId 27205, trailerKey JE9z-gy4De4, Apple TV/Google Play ZA providers). Second call should return from cache (no TMDB calls). Falls back gracefully: {tmdbEnabled:false} if no key, cached/partial data with error field on TMDB failure."
+        - working: true
+          agent: "testing"
+          comment: "✅ ALL TESTS PASSED (10/10): Tested 4 movies (The Dark Knight tmdbId:155, Inception tmdbId:27205, The Shawshank Redemption tmdbId:278, Interstellar tmdbId:157336). All returned valid metadata with tmdbEnabled:true, tmdbId (number), trailerKey (YouTube key string), providers with correct structure (region, link, items with providerId/name/logoUrl/category). Logo URLs confirmed as image.tmdb.org URLs. Categories validated as stream/rent/buy. Caching verified: second call to same movie returned identical data in 206ms (<300ms requirement). Nonexistent movie correctly returns 404. Region parameter working: US region returned different providers (13 items) vs ZA (4 items). Regression tests passed: mood recommendations return results with matchPercent, library CRUD (POST/GET/DELETE) working. Total TMDB calls ~10 (well under rate limit). TMDB integration fully functional."
 
 frontend:
   - task: "Home (hero, presets, For You/Trending rows, catalog grid, search, genre filter)"
@@ -224,3 +238,7 @@ agent_communication:
       message: "MVP backend complete. Please test all backend endpoints at {NEXT_PUBLIC_BASE_URL}/api. IMPORTANT: do NOT run POST /api/seed?force=true unless catalog is broken (it refetches 126 posters). Use a fresh UUID as userId for library tests and clean up test entries with DELETE afterwards."
     - agent: "testing"
       message: "✅ BACKEND TESTING COMPLETE - ALL 25 TESTS PASSED! Tested all endpoints: health check, movies catalog (search/genre/sort/limit), genres, movie detail, mood recommendations (cozy/dark/invalid), library CRUD (add/update/get/filter/delete), validation (status/rating/userId/movieId), For You recommendations (with/without userId). Database seeded with 126 movies, Wikipedia posters working, mood-based recommendations emotionally accurate (Julie & Julia for cozy, Se7en for dark), library operations flawless. No issues found. Backend MVP is production-ready!"
+    - agent: "main"
+      message: "Added TMDB integration. Test GET /api/movies/:id/metadata for 3-4 different movies (get ids from GET /api/movies). Verify shape {tmdbEnabled:true, tmdbId, trailerKey, providers:{region:'ZA', link, items:[{providerId,name,logoUrl,category}], cachedAt}, posterUrl}. Verify caching: repeat call returns same data fast. Test invalid movie id -> 404. Do NOT hammer the endpoint (TMDB rate limit ~40 req/10s). Also quick-regression: mood recs + library CRUD still working."
+    - agent: "testing"
+      message: "✅ TMDB METADATA ENDPOINT TESTING COMPLETE - ALL 10 TESTS PASSED! Tested 4 movies with full metadata validation (The Dark Knight, Inception, The Shawshank Redemption, Interstellar). All returned correct structure: tmdbEnabled:true, tmdbId (number), trailerKey (YouTube key), providers with region/link/items (providerId/name/logoUrl/category). Logo URLs confirmed as image.tmdb.org URLs. Categories validated as stream/rent/buy. Caching working perfectly: second call returned identical data in 206ms (<300ms requirement). Nonexistent movie correctly returns 404. Region parameter working: US region returned 13 providers vs ZA's 4 providers. Regression tests passed: mood recommendations and library CRUD still working. Total TMDB calls ~10 (well under rate limit). TMDB integration fully functional and production-ready!"
