@@ -187,6 +187,9 @@ frontend:
         - working: true
           agent: "main"
           comment: "Verified via screenshot - posters render, rows populated."
+        - working: true
+          agent: "testing"
+          comment: "✅ COMPREHENSIVE UI TEST PASSED (8/8 checks): Hero title 'Find films that match your mood' renders correctly. All 6 hero preset chips found (cozy, adventurous, reflective, exciting, sadhopeful, mindbending). 'For You' and 'Trending' rows present with 156 movie cards total. Posters are REAL images from TMDB (image.tmdb.org). Full Catalog grid displays 126 movies. Genre filter works perfectly: clicking 'Horror' filters to 9 movies. Search works: typing 'inception' returns Inception movie card. All navigation and interactions smooth. 0 console errors, 0 network failures."
   - task: "Mood Lab (3 sliders, 6 presets, live match % results)"
     implemented: true
     working: true
@@ -198,6 +201,9 @@ frontend:
         - working: true
           agent: "main"
           comment: "Verified via screenshot - Cozy Night In returns emotionally accurate matches with % badges."
+        - working: true
+          agent: "testing"
+          comment: "✅ COMPREHENSIVE UI TEST PASSED (7/7 checks): Navigation to Mood Lab works. All 3 sliders present and functional (slider-comforting, slider-light, slider-calm). All 6 preset buttons found. Mood results grid shows 18 cards with match % badges (97% match on first card). Preset-cozy returns emotionally accurate results: Julie & Julia, Chef, Notting Hill (top 3). Preset-mindbending returns completely different results: Fight Club, Gone Girl, It Follows (top 3) - NO overlap, results change substantially as expected! Slider interaction works: dragging slider changed value from -75 to -10, results updated live. The mood-based recommendation engine is the standout feature and working flawlessly."
   - task: "Movie modal (trailer embed, library controls, star rating, where-to-watch, mood fingerprint, similar)"
     implemented: true
     working: true
@@ -209,9 +215,12 @@ frontend:
         - working: true
           agent: "main"
           comment: "Verified via screenshot. Trailer uses YouTube search embed (no key). Providers are SAMPLE data until TMDB key added."
+        - working: true
+          agent: "testing"
+          comment: "✅ COMPREHENSIVE UI TEST PASSED (9/9 checks): Modal opens correctly with title, overview, and Mood Fingerprint section. WHERE TO WATCH: REAL TMDB providers with 4 logo images from image.tmdb.org (not sample data!) - Apple TV Store and Google Play Movies shown for rent/buy categories. TRAILER: YouTube iframe uses /embed/{key} format with real trailer key (PLl99DlL6b4 for The Shawshank Redemption) - NOT search fallback! Library controls work: clicking 'Watching' button shows toast notification and button becomes active with ring styling. Star rating works: clicking 4th star shows toast and fills 4 stars. Modal close button works. All interactions smooth and responsive."
   - task: "Library page (status tabs, ratings display)"
     implemented: true
-    working: "NA"
+    working: true
     file: "app/page.js"
     stuck_count: 0
     priority: "high"
@@ -220,12 +229,26 @@ frontend:
         - working: "NA"
           agent: "main"
           comment: "Implemented, not yet UI-tested (awaiting user permission for frontend testing)."
+        - working: true
+          agent: "testing"
+          comment: "✅ COMPREHENSIVE UI TEST PASSED (6/6 checks): Library page loads correctly with 'My Library' title. All 4 tabs present with counts: Watching (1), Watched (0), Want to Watch (0), Dropped (0). Movie added in previous test appears under 'Watching' tab with star rating displayed (4 filled stars). Opening movie card modal works. Remove button (remove-from-library-btn) works perfectly: clicking removes movie from library (count: 1 → 0), toast notification appears. Library grid updates immediately after removal."
+  - task: "Continue Watching row"
+    implemented: true
+    working: true
+    file: "app/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+        - working: true
+          agent: "testing"
+          comment: "✅ UI TEST PASSED (2/2 checks): Added The Godfather to 'Watching' status from movie modal. Navigated to Home page. 'Continue Watching' row appeared on Home page with 1 movie card (The Godfather). Row displays correctly with Eye icon and movie card with poster. Dynamic row rendering based on library status working perfectly."
 
 metadata:
   created_by: "main_agent"
   version: "1.0"
-  test_sequence: 2
-  run_ui: false
+  test_sequence: 3
+  run_ui: true
 
 test_plan:
   current_focus: []
@@ -242,3 +265,7 @@ agent_communication:
       message: "Added TMDB integration. Test GET /api/movies/:id/metadata for 3-4 different movies (get ids from GET /api/movies). Verify shape {tmdbEnabled:true, tmdbId, trailerKey, providers:{region:'ZA', link, items:[{providerId,name,logoUrl,category}], cachedAt}, posterUrl}. Verify caching: repeat call returns same data fast. Test invalid movie id -> 404. Do NOT hammer the endpoint (TMDB rate limit ~40 req/10s). Also quick-regression: mood recs + library CRUD still working."
     - agent: "testing"
       message: "✅ TMDB METADATA ENDPOINT TESTING COMPLETE - ALL 10 TESTS PASSED! Tested 4 movies with full metadata validation (The Dark Knight, Inception, The Shawshank Redemption, Interstellar). All returned correct structure: tmdbEnabled:true, tmdbId (number), trailerKey (YouTube key), providers with region/link/items (providerId/name/logoUrl/category). Logo URLs confirmed as image.tmdb.org URLs. Categories validated as stream/rent/buy. Caching working perfectly: second call returned identical data in 206ms (<300ms requirement). Nonexistent movie correctly returns 404. Region parameter working: US region returned 13 providers vs ZA's 4 providers. Regression tests passed: mood recommendations and library CRUD still working. Total TMDB calls ~10 (well under rate limit). TMDB integration fully functional and production-ready!"
+    - agent: "main"
+      message: "User approved automated frontend testing. Please test full UI flows: home page (hero, presets, rows, catalog grid, search, genre filter), Mood Lab (sliders change results, presets, match % badges), movie modal (real TMDB trailer plays via /embed/{key}, real ZA providers with logos render, library status buttons, star rating), Library page (tabs, counts, remove). userId is auto-generated in localStorage."
+    - agent: "testing"
+      message: "✅ FRONTEND UI TESTING COMPLETE - ALL 32 TESTS PASSED! Tested all 5 major flows with 0 console errors and 0 network failures. HOME PAGE (8/8): Hero, 6 presets, For You/Trending rows with 156 cards, catalog grid (126 movies), genre filter (Horror→9 movies), search (inception works). MOOD LAB (7/7): 3 sliders functional, 6 presets, 18 results with match % badges, cozy vs mindbending results completely different (NO overlap in top 3), slider drag updates results live. MOVIE MODAL (9/9): Real TMDB providers with logos (4 providers: Apple TV Store, Google Play Movies), real YouTube trailer embed (/embed/{key} format, NOT search fallback!), library controls work (Watching button + toast), star rating works (4 stars filled + toast). LIBRARY PAGE (6/6): All 4 tabs with counts, movie appears with star rating, remove button works (count 1→0). CONTINUE WATCHING (2/2): Row appears with added movie. MVP is production-ready and exceeds expectations - TMDB integration delivers real trailers and providers!"
