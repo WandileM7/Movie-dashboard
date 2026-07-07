@@ -8,7 +8,7 @@ import { Toaster, toast } from 'sonner';
 import {
   Film, Search, Star, X, Play, Compass, Library as LibraryIcon, Home as HomeIcon,
   Sparkles, TrendingUp, Trash2, Loader2, Plus, Check, Eye, Bookmark, ThumbsDown, MapPin,
-  Orbit, Dna,
+  Orbit, Dna, Heart, LogOut,
 } from 'lucide-react';
 import {
   ResponsiveContainer, PieChart, Pie, Cell, RadarChart, PolarGrid, PolarAngleAxis, Radar,
@@ -34,15 +34,100 @@ const PROVIDER_COLORS = {
   'MUBI': 'bg-teal-600/20 text-teal-300 border-teal-600/40',
 };
 
-function getUserId() {
+// Pre-auth versions of the app stored a random id in localStorage. We keep
+// reading it once so a returning user's old library can be merged into their
+// new account, then the key is removed.
+function getLegacyUserId() {
   if (typeof window === 'undefined') return null;
-  let id = localStorage.getItem('tc_user_id');
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem('tc_user_id', id);
-  }
-  return id;
+  return localStorage.getItem('tc_user_id');
 }
+
+// ---------- Auth screen ----------
+const AuthScreen = ({ onAuthed }) => {
+  const [mode, setMode] = useState('login'); // 'login' | 'signup'
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  const submit = async (e) => {
+    e.preventDefault();
+    setError('');
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/auth/${mode === 'login' ? 'login' : 'register'}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(mode === 'login' ? { email, password } : { email, password, name }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Something went wrong');
+      onAuthed(data.user);
+    } catch (err) {
+      setError(err.message);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-2.5 justify-center mb-8">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center shadow-lg shadow-violet-900/50">
+            <Compass className="w-5.5 h-5.5 text-white w-6 h-6" />
+          </div>
+          <span className="font-bold text-xl font-display">Taste<span className="text-violet-400">Cartography</span></span>
+        </div>
+
+        <div className="bg-white/[0.03] rounded-2xl ring-1 ring-white/10 p-6">
+          <h1 className="text-lg font-semibold mb-1">{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+          <p className="text-xs text-zinc-500 mb-5">
+            {mode === 'login' ? 'Sign in to your library and recommendations.' : 'Your library and taste profile, saved across devices.'}
+          </p>
+
+          <form onSubmit={submit} className="space-y-3">
+            {mode === 'signup' && (
+              <input
+                value={name} onChange={(e) => setName(e.target.value)}
+                placeholder="Name" autoComplete="name" data-testid="auth-name"
+                className="w-full h-10 px-3.5 rounded-xl bg-white/5 border border-white/10 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60 transition"
+              />
+            )}
+            <input
+              value={email} onChange={(e) => setEmail(e.target.value)}
+              placeholder="Email" type="email" required autoComplete="email" data-testid="auth-email"
+              className="w-full h-10 px-3.5 rounded-xl bg-white/5 border border-white/10 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60 transition"
+            />
+            <input
+              value={password} onChange={(e) => setPassword(e.target.value)}
+              placeholder={mode === 'signup' ? 'Password (min 8 characters)' : 'Password'}
+              type="password" required minLength={8}
+              autoComplete={mode === 'login' ? 'current-password' : 'new-password'} data-testid="auth-password"
+              className="w-full h-10 px-3.5 rounded-xl bg-white/5 border border-white/10 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60 transition"
+            />
+            {error && <p className="text-xs text-red-400" data-testid="auth-error">{error}</p>}
+            <button
+              type="submit" disabled={busy} data-testid="auth-submit"
+              className="w-full h-10 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 font-semibold text-sm hover:opacity-90 disabled:opacity-50 transition flex items-center justify-center gap-2"
+            >
+              {busy && <Loader2 className="w-4 h-4 animate-spin" />}
+              {mode === 'login' ? 'Sign in' : 'Sign up'}
+            </button>
+          </form>
+
+          <button
+            onClick={() => { setMode(mode === 'login' ? 'signup' : 'login'); setError(''); }}
+            data-testid="auth-toggle-mode"
+            className="w-full text-center text-xs text-zinc-500 hover:text-zinc-300 mt-4 transition"
+          >
+            {mode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
 
 const gradientFor = (title) => {
   let h = 0;
@@ -385,7 +470,7 @@ const TasteDNA = ({ libItems, onBrowse }) => {
 };
 
 // ---------- Detail Modal ----------
-const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemove, onOpen, libMap, onQuickAdd }) => {
+const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onToggleLike, onRemove, onOpen, libMap, onQuickAdd }) => {
   const [detail, setDetail] = useState(null);
   const [meta, setMeta] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
@@ -460,6 +545,13 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onRemo
                     </button>
                   );
                 })}
+                <button
+                  onClick={() => onToggleLike(movie)}
+                  data-testid="like-btn"
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-medium transition ${libEntry?.liked ? 'text-rose-300 border-rose-500/50 bg-rose-500/10 ring-1 ring-current' : 'border-zinc-700 text-zinc-400 hover:border-rose-500/50 hover:text-rose-300'}`}
+                >
+                  <Heart className={`w-3.5 h-3.5 ${libEntry?.liked ? 'fill-rose-400 text-rose-400' : ''}`} /> {libEntry?.liked ? 'Loved' : 'Love'}
+                </button>
                 {libEntry && (
                   <button onClick={() => onRemove(movie)} className="flex items-center gap-1.5 px-3 py-1.5 rounded-full border border-red-900/60 text-red-400 text-xs hover:bg-red-950/40 transition" data-testid="remove-from-library-btn">
                     <Trash2 className="w-3.5 h-3.5" /> Remove
@@ -562,7 +654,7 @@ const MoodSlider = ({ leftLabel, rightLabel, leftEmoji, rightEmoji, value, onCha
 
 // ---------- Main App ----------
 function App() {
-  const [userId, setUserId] = useState(null);
+  const [user, setUser] = useState(undefined); // undefined = checking, null = signed out
   const [view, setView] = useState('home');
   const [movies, setMovies] = useState([]);
   const [genres, setGenres] = useState([]);
@@ -581,7 +673,13 @@ function App() {
 
   const libMap = useMemo(() => Object.fromEntries(libItems.map((i) => [i.movieId, i])), [libItems]);
 
-  useEffect(() => { setUserId(getUserId()); }, []);
+  // Who am I? (session cookie -> user)
+  useEffect(() => {
+    fetch('/api/auth/me')
+      .then((r) => r.json())
+      .then((d) => setUser(d.user || null))
+      .catch(() => setUser(null));
+  }, []);
 
   const loadMovies = useCallback(async () => {
     setLoading(true);
@@ -595,24 +693,53 @@ function App() {
     setLoading(false);
   }, []);
 
-  const loadLibrary = useCallback(async (uid) => {
-    if (!uid) return;
+  // Session cookie identifies the user — no userId params anywhere.
+  const loadLibrary = useCallback(async () => {
     try {
-      const res = await fetch(`/api/library?userId=${uid}`);
+      const res = await fetch('/api/library');
+      if (!res.ok) return;
       const data = await res.json();
       setLibItems(data.items || []);
     } catch (e) {}
   }, []);
 
-  const loadForYou = useCallback(async (uid) => {
+  const loadForYou = useCallback(async () => {
     try {
-      const res = await fetch(`/api/recommendations/foryou?userId=${uid || ''}`);
+      const res = await fetch('/api/recommendations/foryou');
       setForYou(await res.json());
     } catch (e) {}
   }, []);
 
-  useEffect(() => { loadMovies(); }, [loadMovies]);
-  useEffect(() => { if (userId) { loadLibrary(userId); loadForYou(userId); } }, [userId, loadLibrary, loadForYou]);
+  useEffect(() => { if (user) loadMovies(); }, [user, loadMovies]);
+
+  // On sign-in: merge any pre-auth localStorage library into the account, then load.
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      const legacy = getLegacyUserId();
+      if (legacy) {
+        try {
+          const res = await fetch('/api/library/migrate', {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ legacyUserId: legacy }),
+          });
+          const d = await res.json();
+          localStorage.removeItem('tc_user_id');
+          if (d.migrated > 0) toast.success(`Restored ${d.migrated} movie${d.migrated === 1 ? '' : 's'} from your previous library`);
+        } catch (e) {}
+      }
+      loadLibrary();
+      loadForYou();
+    })();
+  }, [user, loadLibrary, loadForYou]);
+
+  const signOut = async () => {
+    await fetch('/api/auth/logout', { method: 'POST' });
+    setUser(null);
+    setLibItems([]);
+    setForYou({ profileBased: false, results: [] });
+    setView('home');
+  };
 
   // Mood querying with debounce
   const fetchMood = useCallback(async (m) => {
@@ -641,13 +768,13 @@ function App() {
     const existing = libMap[movie.id];
     const updated = existing
       ? libItems.map((i) => (i.movieId === movie.id ? { ...i, status, updatedAt: now } : i))
-      : [{ userId, movieId: movie.id, status, updatedAt: now, addedAt: now, movie }, ...libItems];
+      : [{ movieId: movie.id, status, updatedAt: now, addedAt: now, movie }, ...libItems];
     setLibItems(updated);
     try {
-      const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, movieId: movie.id, status }) });
+      const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ movieId: movie.id, status }) });
       if (!res.ok) throw new Error();
       toast.success(`${movie.title} → ${STATUS_META[status].label}`);
-      loadForYou(userId);
+      loadForYou();
     } catch (e) { setLibItems(prev); toast.error('Failed to update library'); }
   };
 
@@ -656,21 +783,38 @@ function App() {
     const existing = libMap[movie.id];
     const updated = existing
       ? libItems.map((i) => (i.movieId === movie.id ? { ...i, rating, updatedAt: now } : i))
-      : [{ userId, movieId: movie.id, status: 'watched', rating, updatedAt: now, addedAt: now, movie }, ...libItems];
+      : [{ movieId: movie.id, status: 'watched', rating, updatedAt: now, addedAt: now, movie }, ...libItems];
     setLibItems(updated);
     try {
-      await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ userId, movieId: movie.id, rating, ...(existing ? {} : { status: 'watched' }) }) });
+      await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ movieId: movie.id, rating, ...(existing ? {} : { status: 'watched' }) }) });
       toast.success(`Rated ${movie.title} ${rating}★`);
-      loadForYou(userId);
+      loadForYou();
     } catch (e) { toast.error('Failed to save rating'); }
+  };
+
+  const toggleLike = async (movie) => {
+    const prev = libItems;
+    const now = new Date().toISOString();
+    const existing = libMap[movie.id];
+    const liked = !existing?.liked;
+    const updated = existing
+      ? libItems.map((i) => (i.movieId === movie.id ? { ...i, liked, updatedAt: now } : i))
+      : [{ movieId: movie.id, status: 'want_to_watch', liked, updatedAt: now, addedAt: now, movie }, ...libItems];
+    setLibItems(updated);
+    try {
+      const res = await fetch('/api/library', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ movieId: movie.id, liked }) });
+      if (!res.ok) throw new Error();
+      toast.success(liked ? `❤️ Loved ${movie.title}` : `Removed love from ${movie.title}`);
+      loadForYou();
+    } catch (e) { setLibItems(prev); toast.error('Failed to update'); }
   };
 
   const removeFromLib = async (movie) => {
     setLibItems(libItems.filter((i) => i.movieId !== movie.id));
     try {
-      await fetch(`/api/library/${movie.id}?userId=${userId}`, { method: 'DELETE' });
+      await fetch(`/api/library/${movie.id}`, { method: 'DELETE' });
       toast.success(`Removed ${movie.title} from library`);
-      loadForYou(userId);
+      loadForYou();
     } catch (e) {}
   };
 
@@ -704,6 +848,23 @@ function App() {
     </button>
   );
 
+  // ---------- Auth gate ----------
+  if (user === undefined) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 className="w-7 h-7 animate-spin text-violet-500" />
+      </div>
+    );
+  }
+  if (user === null) {
+    return (
+      <>
+        <Toaster theme="dark" position="bottom-right" richColors />
+        <AuthScreen onAuthed={setUser} />
+      </>
+    );
+  }
+
   return (
     <div className="min-h-screen">
       <Toaster theme="dark" position="bottom-right" richColors />
@@ -733,6 +894,23 @@ function App() {
               data-testid="search-input"
               className="w-full h-9 pl-9 pr-3 rounded-full bg-white/5 border border-white/10 text-sm placeholder:text-zinc-600 focus:outline-none focus:border-violet-500/60 focus:bg-white/[0.07] transition"
             />
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <div
+              title={user.email}
+              data-testid="user-chip"
+              className="w-8 h-8 rounded-full bg-gradient-to-br from-violet-600/60 to-fuchsia-600/60 ring-1 ring-white/15 flex items-center justify-center text-xs font-bold uppercase"
+            >
+              {(user.name || user.email)[0]}
+            </div>
+            <button
+              onClick={signOut}
+              title="Sign out"
+              data-testid="sign-out-btn"
+              className="w-8 h-8 rounded-full flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 transition"
+            >
+              <LogOut className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </header>
@@ -914,6 +1092,7 @@ function App() {
           libEntry={libMap[selected.id]}
           onSetStatus={setStatus}
           onSetRating={setRating}
+          onToggleLike={toggleLike}
           onRemove={(m) => { removeFromLib(m); }}
           onOpen={setSelected}
           libMap={libMap}

@@ -2,6 +2,10 @@ import { MongoClient } from 'mongodb';
 import { v4 as uuidv4 } from 'uuid';
 import { NextResponse } from 'next/server';
 import { SEED_MOVIES, PROVIDER_POOL } from '@/lib/seedMovies';
+import {
+  hashPassword, verifyPassword, signSession, getSessionUser,
+  SESSION_COOKIE, cookieOptions,
+} from '@/lib/auth';
 
 let client = null;
 let seedPromise = null;
@@ -229,6 +233,76 @@ async function handler(request, { params }) {
     // Health
     if (route === '' && method === 'GET') return json({ status: 'ok', app: 'Taste Cartography API' });
 
+    // ---------- Auth ----------
+    if (route === 'auth/register' && method === 'POST') {
+      const { email, password, name } = await request.json();
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(cleanEmail)) return json({ error: 'Please enter a valid email' }, 400);
+      if (!password || String(password).length < 8) return json({ error: 'Password must be at least 8 characters' }, 400);
+      const users = db.collection('users');
+      await users.createIndex({ email: 1 }, { unique: true });
+      const existing = await users.findOne({ email: cleanEmail });
+      if (existing) return json({ error: 'An account with this email already exists' }, 409);
+      const user = {
+        id: uuidv4(),
+        email: cleanEmail,
+        name: (name || '').trim() || cleanEmail.split('@')[0],
+        passwordHash: await hashPassword(String(password)),
+        createdAt: new Date().toISOString(),
+      };
+      await users.insertOne(user);
+      const token = await signSession(user);
+      const res = json({ user: { id: user.id, email: user.email, name: user.name } }, 201);
+      res.cookies.set(SESSION_COOKIE, token, cookieOptions);
+      return res;
+    }
+
+    if (route === 'auth/login' && method === 'POST') {
+      const { email, password } = await request.json();
+      const cleanEmail = String(email || '').trim().toLowerCase();
+      const user = await db.collection('users').findOne({ email: cleanEmail });
+      // Same error for unknown email / wrong password (no account enumeration).
+      if (!user || !(await verifyPassword(String(password || ''), user.passwordHash))) {
+        return json({ error: 'Invalid email or password' }, 401);
+      }
+      const token = await signSession(user);
+      const res = json({ user: { id: user.id, email: user.email, name: user.name } });
+      res.cookies.set(SESSION_COOKIE, token, cookieOptions);
+      return res;
+    }
+
+    if (route === 'auth/logout' && method === 'POST') {
+      const res = json({ ok: true });
+      res.cookies.set(SESSION_COOKIE, '', { ...cookieOptions, maxAge: 0 });
+      return res;
+    }
+
+    if (route === 'auth/me' && method === 'GET') {
+      const user = await getSessionUser(request);
+      return json({ user });
+    }
+
+    // Merge a pre-auth (localStorage-era) library into the signed-in account.
+    if (route === 'library/migrate' && method === 'POST') {
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
+      const { legacyUserId } = await request.json();
+      if (!legacyUserId || legacyUserId === user.id) return json({ migrated: 0 });
+      const lib = db.collection('library');
+      const legacyItems = await lib.find({ userId: legacyUserId }).toArray();
+      let migrated = 0;
+      for (const item of legacyItems) {
+        const exists = await lib.findOne({ userId: user.id, movieId: item.movieId });
+        if (!exists) {
+          const { _id, userId, ...rest } = item;
+          await lib.insertOne({ ...rest, userId: user.id });
+          migrated++;
+        }
+      }
+      await lib.deleteMany({ userId: legacyUserId });
+      return json({ migrated });
+    }
+
     // Force reseed
     if (route === 'seed' && method === 'POST') {
       const r = await ensureSeeded(db, url.searchParams.get('force') === 'true');
@@ -314,7 +388,8 @@ async function handler(request, { params }) {
     // For You recommendations (content-based from library profile)
     if (route === 'recommendations/foryou' && method === 'GET') {
       await ensureSeeded(db);
-      const userId = url.searchParams.get('userId');
+      const sessionUser = await getSessionUser(request);
+      const userId = sessionUser?.id || null;
       const all = await db.collection('movies').find({}, { projection: { _id: 0 } }).toArray();
       const popular = [...all].sort((a, b) => b.popularity * b.rating - a.popularity * a.rating);
       if (!userId) return json({ profileBased: false, results: popular.slice(0, 20) });
@@ -329,6 +404,7 @@ async function handler(request, { params }) {
           else if (i.status === 'dropped') w = -1;
           else if (i.status === 'want_to_watch') w = 0.7;
           else w = 1.2; // watching / watched
+          if (i.liked) w += 0.8; // hearts are a strong positive signal
           return { mv, w };
         })
         .filter(Boolean);
@@ -362,17 +438,19 @@ async function handler(request, { params }) {
 
     // Library CRUD
     if (route === 'library' && method === 'GET') {
-      const userId = url.searchParams.get('userId');
-      if (!userId) return json({ error: 'userId is required' }, 400);
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
       await ensureSeeded(db);
-      const items = await getLibraryJoined(db, userId, url.searchParams.get('status'));
+      const items = await getLibraryJoined(db, user.id, url.searchParams.get('status'));
       return json({ items });
     }
 
     if (route === 'library' && method === 'POST') {
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
       const body = await request.json();
-      const { userId, movieId, status, rating } = body;
-      if (!userId || !movieId) return json({ error: 'userId and movieId are required' }, 400);
+      const { movieId, status, rating, liked } = body;
+      if (!movieId) return json({ error: 'movieId is required' }, 400);
       const movie = await db.collection('movies').findOne({ id: movieId });
       if (!movie) return json({ error: 'Movie not found' }, 404);
       const validStatuses = ['watching', 'watched', 'want_to_watch', 'dropped'];
@@ -382,19 +460,20 @@ async function handler(request, { params }) {
       const set = { updatedAt: now };
       if (status) set.status = status;
       if (rating !== undefined) set.rating = rating;
+      if (liked !== undefined) set.liked = !!liked;
       await db.collection('library').updateOne(
-        { userId, movieId },
-        { $set: set, $setOnInsert: { userId, movieId, addedAt: now, ...(status ? {} : { status: 'want_to_watch' }) } },
+        { userId: user.id, movieId },
+        { $set: set, $setOnInsert: { userId: user.id, movieId, addedAt: now, ...(status ? {} : { status: 'want_to_watch' }) } },
         { upsert: true }
       );
-      const item = await db.collection('library').findOne({ userId, movieId }, { projection: { _id: 0 } });
+      const item = await db.collection('library').findOne({ userId: user.id, movieId }, { projection: { _id: 0 } });
       return json({ item });
     }
 
     if (path[0] === 'library' && path[1] && method === 'DELETE') {
-      const userId = url.searchParams.get('userId');
-      if (!userId) return json({ error: 'userId is required' }, 400);
-      const r = await db.collection('library').deleteOne({ userId, movieId: path[1] });
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
+      const r = await db.collection('library').deleteOne({ userId: user.id, movieId: path[1] });
       return json({ deleted: r.deletedCount > 0 });
     }
 
