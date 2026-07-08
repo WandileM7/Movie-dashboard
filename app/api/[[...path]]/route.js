@@ -219,33 +219,59 @@ async function fetchWikipediaPosters(wikiTitles) {
   return results;
 }
 
+let seedSyncedThisBoot = false;
+
+// ADDITIVE catalog sync: inserts any seed titles missing from the DB (matched
+// by title+year) and NEVER deletes or re-ids existing movies — so user library
+// references always stay intact and new seed titles roll out automatically on
+// the next request after a deploy. `force` additionally refreshes the curated
+// fields (mood, rating, genres, overview) on existing titles, in place.
 async function ensureSeeded(db, force = false) {
   const col = db.collection('movies');
-  const count = await col.countDocuments();
-  if (count > 0 && !force) return { seeded: false, count };
+  if (seedSyncedThisBoot && !force) return { seeded: false };
   if (seedPromise && !force) return seedPromise;
   seedPromise = (async () => {
-    if (force) await col.deleteMany({});
-    const posters = await fetchWikipediaPosters(SEED_MOVIES.map((m) => m.wiki));
-    const docs = SEED_MOVIES.map((m) => ({
-      id: uuidv4(),
-      title: m.title,
-      year: m.year,
-      genres: m.genres,
-      overview: m.overview,
-      rating: m.rating,
-      popularity: m.popularity,
-      mood: m.mood, // { c: comforting<->challenging, l: light<->heavy, m: calm<->intense }
-      posterUrl: posters[m.wiki] || null,
-      providers: assignProviders(m.title),
-      providersRegion: 'ZA',
-      providersSample: true,
-      createdAt: new Date().toISOString(),
-    }));
-    await col.insertMany(docs);
+    const existing = await col.find({}, { projection: { title: 1, year: 1 } }).toArray();
+    const have = new Set(existing.map((m) => `${m.title}::${m.year}`));
+    const missing = SEED_MOVIES.filter((m) => !have.has(`${m.title}::${m.year}`));
+
+    let added = 0;
+    let postersFound = 0;
+    if (missing.length) {
+      const posters = await fetchWikipediaPosters(missing.map((m) => m.wiki));
+      postersFound = Object.keys(posters).length;
+      const docs = missing.map((m) => ({
+        id: uuidv4(),
+        title: m.title,
+        year: m.year,
+        genres: m.genres,
+        overview: m.overview,
+        rating: m.rating,
+        popularity: m.popularity,
+        mood: m.mood, // { c: comforting<->challenging, l: light<->heavy, m: calm<->intense }
+        posterUrl: posters[m.wiki] || null,
+        providers: assignProviders(m.title),
+        providersRegion: 'ZA',
+        providersSample: true,
+        createdAt: new Date().toISOString(),
+      }));
+      await col.insertMany(docs);
+      added = docs.length;
+    }
+
+    if (force) {
+      for (const m of SEED_MOVIES) {
+        await col.updateOne(
+          { title: m.title, year: m.year },
+          { $set: { genres: m.genres, overview: m.overview, rating: m.rating, popularity: m.popularity, mood: m.mood } }
+        );
+      }
+    }
+
     await col.createIndex({ id: 1 }, { unique: true });
     await db.collection('library').createIndex({ userId: 1, movieId: 1 }, { unique: true });
-    return { seeded: true, count: docs.length, postersFound: Object.keys(posters).length };
+    seedSyncedThisBoot = true;
+    return { seeded: added > 0, added, total: existing.length + added, postersFound, refreshed: force };
   })();
   const r = await seedPromise;
   seedPromise = null;
