@@ -759,6 +759,9 @@ function App() {
       }
       loadLibrary();
       loadForYou();
+      // Quietly refresh any stale catalog ratings from TMDB (self-limiting:
+      // processes at most 60 stale titles, no-op when everything is fresh).
+      fetch('/api/sync-ratings', { method: 'POST' }).catch(() => {});
     })();
   }, [user, loadLibrary, loadForYou]);
 

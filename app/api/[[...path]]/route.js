@@ -42,6 +42,7 @@ function assignProviders(title) {
 const TMDB_BASE = 'https://api.themoviedb.org/3';
 const TMDB_IMG = 'https://image.tmdb.org/t/p';
 const TRAILER_TTL_MS = 30 * 24 * 3600 * 1000; // 30 days
+const RATING_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days — live TMDB rating refresh
 const PROVIDER_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
 const DEEPLINK_TTL_MS = 7 * 24 * 3600 * 1000; // 7 days
 
@@ -115,7 +116,26 @@ async function getMovieMetadata(db, movie, region) {
       updates.tmdbId = tmdbId;
       if (best.poster_path) updates.posterUrl = `${TMDB_IMG}/w500${best.poster_path}`;
       if (best.backdrop_path) updates.backdropUrl = `${TMDB_IMG}/w780${best.backdrop_path}`;
+      // The search response already carries live ratings — use them.
+      if (typeof best.vote_average === 'number' && (best.vote_count || 0) >= 20) {
+        updates.rating = Math.round(best.vote_average * 10) / 10;
+        updates.ratingSyncedAt = new Date().toISOString();
+      }
     }
+  }
+
+  // 1.5 Live rating refresh (7-day TTL): replace the hardcoded seed rating
+  // with TMDB's current vote_average. vote_count >= 20 guards against noisy
+  // scores on brand-new releases.
+  if (tmdbId && !updates.rating && !isFresh(movie.ratingSyncedAt, RATING_TTL_MS)) {
+    try {
+      const d = await tmdbFetch(`/movie/${tmdbId}`);
+      if (typeof d.vote_average === 'number' && (d.vote_count || 0) >= 20) {
+        updates.rating = Math.round(d.vote_average * 10) / 10;
+      }
+      if (typeof d.popularity === 'number') updates.tmdbPopularity = d.popularity;
+      updates.ratingSyncedAt = new Date().toISOString();
+    } catch (e) { /* keep existing rating; retry after TTL */ }
   }
 
   // 2. Official YouTube trailer key (30-day TTL)
@@ -395,6 +415,60 @@ async function handler(request, { params }) {
     if (route === 'seed' && method === 'POST') {
       const r = await ensureSeeded(db, url.searchParams.get('force') === 'true');
       return json(r);
+    }
+
+    // Batch-refresh catalog ratings/popularity from TMDB. Processes up to 60
+    // stale movies per call (serverless-friendly); call repeatedly until
+    // remaining=0. When a pass completes, popularity is recomputed as each
+    // movie's percentile (0-100) of live TMDB popularity across the catalog.
+    if (route === 'sync-ratings' && method === 'POST') {
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
+      if (!process.env.TMDB_API_KEY) return json({ error: 'TMDB_API_KEY not configured' }, 400);
+      await ensureSeeded(db);
+      const col = db.collection('movies');
+      const staleBefore = new Date(Date.now() - RATING_TTL_MS).toISOString();
+      const staleQuery = { $or: [{ ratingSyncedAt: { $exists: false } }, { ratingSyncedAt: { $lt: staleBefore } }] };
+      const stale = await col.find(staleQuery, { projection: { _id: 0, id: 1, title: 1, year: 1, tmdbId: 1 } }).limit(60).toArray();
+
+      let updated = 0, failed = 0;
+      const BATCH = 8;
+      for (let i = 0; i < stale.length; i += BATCH) {
+        await Promise.all(stale.slice(i, i + BATCH).map(async (m) => {
+          try {
+            let tmdbId = m.tmdbId;
+            if (!tmdbId) {
+              const s = await tmdbFetch('/search/movie', { query: m.title, year: m.year });
+              const best = (s.results || []).find((r) => (r.title || '').toLowerCase() === m.title.toLowerCase()) || (s.results || [])[0];
+              if (!best) { // no TMDB match — mark synced so we don't retry forever
+                await col.updateOne({ id: m.id }, { $set: { ratingSyncedAt: new Date().toISOString() } });
+                return;
+              }
+              tmdbId = best.id;
+            }
+            const d = await tmdbFetch(`/movie/${tmdbId}`);
+            const set = { tmdbId, ratingSyncedAt: new Date().toISOString() };
+            if (typeof d.vote_average === 'number' && (d.vote_count || 0) >= 20) set.rating = Math.round(d.vote_average * 10) / 10;
+            if (typeof d.popularity === 'number') set.tmdbPopularity = d.popularity;
+            await col.updateOne({ id: m.id }, { $set: set });
+            updated++;
+          } catch (e) { failed++; }
+        }));
+      }
+
+      const remaining = await col.countDocuments(staleQuery);
+      if (remaining === 0) {
+        // Full pass complete: recompute popularity percentiles from live data.
+        const withPop = await col
+          .find({ tmdbPopularity: { $exists: true, $ne: null } }, { projection: { id: 1, tmdbPopularity: 1 } })
+          .toArray();
+        withPop.sort((a, b) => a.tmdbPopularity - b.tmdbPopularity);
+        const denom = Math.max(withPop.length - 1, 1);
+        for (let i = 0; i < withPop.length; i++) {
+          await col.updateOne({ id: withPop[i].id }, { $set: { popularity: Math.round((i / denom) * 100) } });
+        }
+      }
+      return json({ processed: stale.length, updated, failed, remaining });
     }
 
     // Movies list
