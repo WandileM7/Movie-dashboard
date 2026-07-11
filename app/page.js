@@ -471,7 +471,69 @@ const TasteDNA = ({ libItems, onBrowse }) => {
 };
 
 // ---------- Detail Modal ----------
-const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onToggleLike, onRemove, onOpen, libMap, onQuickAdd }) => {
+// ---------- Now Watching bar ----------
+const NowWatchingBar = ({ item, pct, onAction, onOpen }) => {
+  const m = item.movie;
+  const s = item.session;
+  const total = (m?.runtime || 120) * 60;
+  const remaining = Math.max(0, total * (1 - pct / 100));
+  const fmt = (sec) => {
+    const h = Math.floor(sec / 3600), min = Math.round((sec % 3600) / 60);
+    return h ? `${h}h ${min}m` : `${min}m`;
+  };
+  const done = pct >= 100;
+  const playing = s.state === 'playing';
+  return (
+    <div className="fixed bottom-3 inset-x-3 z-40 flex justify-center pointer-events-none" data-testid="now-watching-bar">
+      <div className="pointer-events-auto w-full max-w-2xl bg-[#16161f]/95 backdrop-blur-md rounded-2xl ring-1 ring-white/10 shadow-2xl p-3 flex items-center gap-3">
+        <button onClick={() => onOpen(m)} className="shrink-0" title={m?.title}>
+          {m?.posterUrl
+            ? <img src={m.posterUrl} alt={m.title} className="w-10 h-14 object-cover rounded-lg ring-1 ring-white/10" />
+            : <div className="w-10 h-14 rounded-lg bg-gradient-to-br from-violet-800 to-fuchsia-800" />}
+        </button>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-baseline justify-between gap-2">
+            <p className="text-sm font-semibold truncate">{m?.title}</p>
+            <p className="text-[11px] text-zinc-500 shrink-0">
+              {done ? 'Did you finish?' : playing ? `${fmt(remaining)} left` : 'Paused'}
+            </p>
+          </div>
+          <div className="mt-1.5 h-1.5 rounded-full bg-white/10 overflow-hidden">
+            <div
+              className={`h-full rounded-full bg-gradient-to-r from-violet-500 to-fuchsia-500 transition-[width] duration-1000 ${done ? 'animate-pulse' : ''}`}
+              style={{ width: `${pct}%` }}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            onClick={() => onAction(m, playing ? 'pause' : 'resume')}
+            title={playing ? 'Pause' : 'Resume'} data-testid="session-pause-resume"
+            className="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center hover:bg-white/10 transition"
+          >
+            {playing ? <span className="flex gap-[3px]"><span className="w-[3px] h-3.5 bg-zinc-200 rounded-sm" /><span className="w-[3px] h-3.5 bg-zinc-200 rounded-sm" /></span> : <Play className="w-4 h-4" />}
+          </button>
+          <button
+            onClick={() => onAction(m, 'finish')}
+            title="Finished watching" data-testid="session-finish"
+            className={`w-9 h-9 rounded-full flex items-center justify-center transition ${done ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 animate-pulse' : 'bg-white/5 border border-white/10 hover:bg-white/10'}`}
+          >
+            <Check className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => onAction(m, 'cancel')}
+            title="Stop session (keep as watching)" data-testid="session-cancel"
+            className="w-9 h-9 rounded-full bg-white/5 border border-white/10 flex items-center justify-center text-zinc-500 hover:text-white hover:bg-white/10 transition"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onToggleLike, onRemove, onOpen, libMap, onQuickAdd, onStartSession }) => {
   const [detail, setDetail] = useState(null);
   const [meta, setMeta] = useState(null);
   const [showTrailer, setShowTrailer] = useState(false);
@@ -542,6 +604,21 @@ const MovieModal = ({ movie, onClose, libEntry, onSetStatus, onSetRating, onTogg
             {/* Library controls */}
             <div className="mt-5">
               <p className="text-xs uppercase tracking-widest text-zinc-500 mb-2 font-semibold">My Library</p>
+              <div className="flex flex-wrap gap-2 mb-2">
+                <button
+                  onClick={() => {
+                    const best =
+                      meta?.providers?.items?.find((i) => i.category === 'flatrate' && i.url)?.url ||
+                      meta?.providers?.items?.find((i) => i.url)?.url || null;
+                    onStartSession(movie, libEntry?.session ? null : best);
+                  }}
+                  disabled={!!libEntry?.session}
+                  data-testid="start-watching-btn"
+                  className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold transition ${libEntry?.session ? 'bg-white/5 border border-violet-500/40 text-violet-300 cursor-default' : 'bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:opacity-90'}`}
+                >
+                  <Play className="w-4 h-4" /> {libEntry?.session ? 'Watching now…' : 'Start Watching'}
+                </button>
+              </div>
               <div className="flex flex-wrap gap-2">
                 {Object.entries(STATUS_META).map(([key, meta]) => {
                   const Icon = meta.icon;
@@ -850,6 +927,53 @@ function App() {
     } catch (e) {}
   };
 
+  // ---------- Now Watching sessions ----------
+  const activeSession = libItems.find((i) => i.session);
+
+  // Re-render every second while a session is playing so progress ticks.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    if (!activeSession || activeSession.session?.state !== 'playing') return;
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [activeSession?.movieId, activeSession?.session?.state]);
+
+  const sessionPct = (i) => {
+    if (!i?.session) return null;
+    const total = (i.movie?.runtime || 120) * 60;
+    const el = (i.session.accumulatedSec || 0) +
+      (i.session.state === 'playing' && i.session.lastResumeAt
+        ? (Date.now() - new Date(i.session.lastResumeAt).getTime()) / 1000 : 0);
+    return Math.min(100, (el / total) * 100);
+  };
+
+  const sessionAction = async (movie, action, providerUrl) => {
+    const movieId = movie.id || movie.movieId;
+    if (action === 'start' && providerUrl) window.open(providerUrl, '_blank', 'noopener');
+    try {
+      const res = await fetch('/api/library/session', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ movieId, action }),
+      });
+      if (!res.ok) throw new Error();
+      const { item } = await res.json();
+      setLibItems((prev) => {
+        const base = action === 'start' ? prev.map((i) => (i.session ? { ...i, session: undefined } : i)) : prev;
+        const movieObj = base.find((i) => i.movieId === movieId)?.movie || movies.find((m) => m.id === movieId) || movie;
+        return base.some((i) => i.movieId === movieId)
+          ? base.map((i) => (i.movieId === movieId ? { ...item, movie: i.movie || movieObj } : i))
+          : [{ ...item, movie: movieObj }, ...base];
+      });
+      if (action === 'start') toast.success(`🍿 Now watching ${movie.title}`);
+      if (action === 'finish') {
+        toast.success(`Finished ${movie.title} — how was it?`);
+        loadForYou();
+        const movieObj = libItems.find((i) => i.movieId === movieId)?.movie || movie;
+        setSelected(movieObj); // open the modal to rate + heart it
+      }
+    } catch (e) { toast.error('Session update failed'); }
+  };
+
   const applyPreset = (preset) => {
     setActivePreset(preset.id);
     setMood({ c: Math.round(preset.mood.c * 100), l: Math.round(preset.mood.l * 100), m: Math.round(preset.mood.m * 100) });
@@ -1125,6 +1249,7 @@ function App() {
           onSetStatus={setStatus}
           onSetRating={setRating}
           onToggleLike={toggleLike}
+          onStartSession={(m, url) => sessionAction(m, 'start', url)}
           onRemove={(m) => { removeFromLib(m); }}
           onOpen={setSelected}
           libMap={libMap}
@@ -1132,7 +1257,16 @@ function App() {
         />
       )}
 
-      <footer className="border-t border-white/5 py-8 text-center text-xs text-zinc-600">
+      {activeSession?.movie && (
+        <NowWatchingBar
+          item={activeSession}
+          pct={sessionPct(activeSession) ?? 0}
+          onAction={(m, action) => sessionAction(m, action)}
+          onOpen={setSelected}
+        />
+      )}
+
+      <footer className={`border-t border-white/5 py-8 text-center text-xs text-zinc-600 ${activeSession ? 'pb-24' : ''}`}>
         Taste Cartography — movies mapped by emotion · Region: South Africa 🇿🇦
       </footer>
     </div>

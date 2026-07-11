@@ -124,16 +124,18 @@ async function getMovieMetadata(db, movie, region) {
     }
   }
 
-  // 1.5 Live rating refresh (7-day TTL): replace the hardcoded seed rating
-  // with TMDB's current vote_average. vote_count >= 20 guards against noisy
-  // scores on brand-new releases.
-  if (tmdbId && !updates.rating && !isFresh(movie.ratingSyncedAt, RATING_TTL_MS)) {
+  // 1.5 Live rating + runtime refresh (7-day TTL): replace the hardcoded seed
+  // rating with TMDB's current vote_average, and capture runtime (minutes) —
+  // needed for Now Watching session progress. vote_count >= 20 guards against
+  // noisy scores on brand-new releases.
+  if (tmdbId && !updates.rating && (!isFresh(movie.ratingSyncedAt, RATING_TTL_MS) || !movie.runtime)) {
     try {
       const d = await tmdbFetch(`/movie/${tmdbId}`);
       if (typeof d.vote_average === 'number' && (d.vote_count || 0) >= 20) {
         updates.rating = Math.round(d.vote_average * 10) / 10;
       }
       if (typeof d.popularity === 'number') updates.tmdbPopularity = d.popularity;
+      if (typeof d.runtime === 'number' && d.runtime > 0) updates.runtime = d.runtime;
       updates.ratingSyncedAt = new Date().toISOString();
     } catch (e) { /* keep existing rating; retry after TTL */ }
   }
@@ -450,6 +452,7 @@ async function handler(request, { params }) {
             const set = { tmdbId, ratingSyncedAt: new Date().toISOString() };
             if (typeof d.vote_average === 'number' && (d.vote_count || 0) >= 20) set.rating = Math.round(d.vote_average * 10) / 10;
             if (typeof d.popularity === 'number') set.tmdbPopularity = d.popularity;
+            if (typeof d.runtime === 'number' && d.runtime > 0) set.runtime = d.runtime;
             await col.updateOne({ id: m.id }, { $set: set });
             updated++;
           } catch (e) { failed++; }
@@ -599,6 +602,76 @@ async function handler(request, { params }) {
     }
 
     // Library CRUD
+    // ---------- Now Watching sessions ----------
+    // A session is a server-side stopwatch on a library item:
+    //   session: { state: 'playing'|'paused', accumulatedSec, lastResumeAt, startedAt }
+    // Progress = accumulatedSec + (playing ? now - lastResumeAt : 0), measured
+    // against the movie's TMDB runtime. Survives refreshes and devices.
+    if (route === 'library/session' && method === 'POST') {
+      const user = await getSessionUser(request);
+      if (!user) return json({ error: 'Not signed in' }, 401);
+      const { movieId, action } = await request.json();
+      if (!movieId || !['start', 'pause', 'resume', 'finish', 'cancel'].includes(action)) {
+        return json({ error: 'movieId and a valid action are required' }, 400);
+      }
+      const lib = db.collection('library');
+      const now = new Date();
+      const nowIso = now.toISOString();
+
+      if (action === 'start') {
+        // Only one active session at a time — clear any others.
+        await lib.updateMany({ userId: user.id, session: { $exists: true } }, { $unset: { session: '' } });
+        await lib.updateOne(
+          { userId: user.id, movieId },
+          {
+            $set: {
+              status: 'watching',
+              updatedAt: nowIso,
+              session: { state: 'playing', accumulatedSec: 0, lastResumeAt: nowIso, startedAt: nowIso },
+            },
+            $setOnInsert: { userId: user.id, movieId, addedAt: nowIso },
+          },
+          { upsert: true }
+        );
+      } else {
+        const item = await lib.findOne({ userId: user.id, movieId });
+        if (!item?.session && action !== 'finish') return json({ error: 'No active session for this movie' }, 404);
+        const s = item?.session;
+        const elapsed = s?.state === 'playing' && s.lastResumeAt
+          ? (now - new Date(s.lastResumeAt)) / 1000 : 0;
+
+        if (action === 'pause' && s) {
+          await lib.updateOne({ userId: user.id, movieId }, {
+            $set: {
+              updatedAt: nowIso,
+              'session.state': 'paused',
+              'session.accumulatedSec': (s.accumulatedSec || 0) + elapsed,
+              'session.lastResumeAt': null,
+            },
+          });
+        } else if (action === 'resume' && s) {
+          await lib.updateOne({ userId: user.id, movieId }, {
+            $set: { updatedAt: nowIso, 'session.state': 'playing', 'session.lastResumeAt': nowIso },
+          });
+        } else if (action === 'finish') {
+          await lib.updateOne(
+            { userId: user.id, movieId },
+            {
+              $set: { status: 'watched', watchedAt: nowIso, updatedAt: nowIso },
+              $unset: { session: '' },
+              $setOnInsert: { userId: user.id, movieId, addedAt: nowIso },
+            },
+            { upsert: true }
+          );
+        } else if (action === 'cancel') {
+          await lib.updateOne({ userId: user.id, movieId }, { $set: { updatedAt: nowIso }, $unset: { session: '' } });
+        }
+      }
+
+      const updated = await lib.findOne({ userId: user.id, movieId }, { projection: { _id: 0 } });
+      return json({ item: updated });
+    }
+
     if (route === 'library' && method === 'GET') {
       const user = await getSessionUser(request);
       if (!user) return json({ error: 'Not signed in' }, 401);
